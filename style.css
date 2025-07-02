@@ -2,7 +2,7 @@ body {
     font-family: Arial, sans-serif;
     display: flex;
     justify-content: center;
-    align-items: flex-start; /* Alinha o conteúdotopo */
+    align-items: flex-start; /* Alinha o conteúdo ao topo */
     min-height: 100vh;
     background-color: #f0f0f0;
     margin: 20px;
@@ -18,11 +18,14 @@ body {
     flex-direction: column;
     align-items: center;
     gap: 20px;
+    max-width: 450px; /* Limita a largura para melhor visualização */
+    width: 100%;
 }
 
 h1 {
     color: #333;
     margin-bottom: 15px;
+    text-align: center;
 }
 
 .controls {
@@ -30,19 +33,22 @@ h1 {
     flex-direction: column;
     gap: 15px;
     width: 100%;
-    max-width: 400px;
 }
 
 .slider-group {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
+    width: 100%; /* Garante que o slider ocupe a largura total */
 }
 
 .slider-group label {
     margin-bottom: 5px;
     font-weight: bold;
     color: #555;
+    width: 100%;
+    display: flex;
+    justify-content: space-between; /* Alinha texto e valor do slider */
 }
 
 .slider-group input[type="range"] {
@@ -75,8 +81,9 @@ h1 {
 }
 
 .buttons-group {
-    display: flex;
-    justify-content: space-around;
+    display: grid; /* Usa grid para melhor layout dos botões */
+    grid-template-columns: repeat(2, 1fr); /* Duas colunas */
+    gap: 10px; /* Espaçamento entre os botões */
     margin-top: 10px;
     width: 100%;
 }
@@ -88,8 +95,10 @@ button {
     background-color: #28a745;
     color: white;
     cursor: pointer;
-    font-size: 16px;
+    font-size: 14px; /* Ajusta o tamanho da fonte para caber */
     transition: background-color 0.2s;
+    width: 100%; /* Garante que o botão preencha a célula do grid */
+    box-sizing: border-box; /* Inclui padding e border no width */
 }
 
 button:hover {
@@ -113,14 +122,22 @@ button#hint-btn:hover {
     background-color: #e0a800;
 }
 
+button#undo-move-btn {
+    background-color: #6c757d;
+}
+
+button#undo-move-btn:hover {
+    background-color: #5a6268;
+}
+
+
 #board {
-    margin: 20px 0;
+    margin: 20px auto; /* Centraliza o tabuleiro */
     box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
 }
 
 .messages {
     width: 100%;
-    max-width: 400px;
     background-color: #e9ecef;
     padding: 15px;
     border-radius: 8px;
@@ -145,6 +162,8 @@ button#hint-btn:hover {
     border-radius: 5px;
     max-height: 150px;
     overflow-y: auto;
-    white-space: pre-wrap; /* Permite que o texto quebre linhas */
+    white-space: pre-wrap;
     word-wrap: break-word;
+    font-family: 'Courier New', Courier, monospace; /* Fonte monoespaçada para análise */
+    font-size: 0.9em;
 }
