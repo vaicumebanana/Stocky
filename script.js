@@ -1,36 +1,46 @@
-// A inicialização das variáveis globais deve estar disponível antes do $(document).ready
+// Variáveis globais para o jogo e o Stockfish
 var game = new Chess();
 var board = null;
-var stockfish = null; // A instância do Stockfish.js
-var currentDepth = 10;
-var currentSkillLevel = 10; // Corresponde ao "Skill Level" do Stockfish
+var stockfish = null;
 
-// Usar JQuery para selecionar elementos quando o DOM estiver pronto
+// Valores iniciais para os sliders
+var currentDepth = 10;
+var currentSkillLevel = 10;
+
+// Referências jQuery para os elementos da UI
 var $status, $analysisOutput, $depthSlider, $currentDepthSpan, $skillLevelSlider, $currentSkillLevelSpan;
 
+// --- Funções de Comunicação com Stockfish ---
+
 /**
- * Envia um comando para o Stockfish e lida com a resposta.
- * @param {string} command - O comando UCI a ser enviado (ex: "go depth 10", "position startpos moves e2e4").
- * @returns {Promise<string>} Uma promessa que resolve com a resposta do Stockfish.
+ * Envia um comando para o Stockfish e aguarda uma resposta específica.
+ * @param {string} command - O comando UCI a ser enviado.
+ * @param {string} expectedResponseStart - O prefixo da resposta esperada (ex: 'bestmove', 'info depth').
+ * @param {number} timeout - Tempo limite em ms para aguardar a resposta.
+ * @returns {Promise<string>} Uma promessa que resolve com a primeira mensagem que começa com expectedResponseStart.
  */
-function sendStockfishCommand(command) {
-    return new Promise((resolve) => {
+function sendStockfishCommand(command, expectedResponseStart, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+        let timer = setTimeout(() => {
+            stockfish.onmessage = null; // Limpa o handler
+            reject('Timeout: Stockfish não respondeu a ' + command + ' com ' + expectedResponseStart);
+        }, timeout);
+
         stockfish.onmessage = function (event) {
             var message = event.data || event;
-            // Filtra mensagens irrelevantes para manter a saída limpa,
-            // e captura as linhas que queremos.
-            if (message.startsWith('bestmove') || message.startsWith('info depth')) {
+            // console.log("Stockfish message:", message); // Para depuração
+
+            if (message.startsWith(expectedResponseStart)) {
+                clearTimeout(timer);
+                stockfish.onmessage = null; // Limpa o handler para esta requisição
                 resolve(message);
-                // Importante: Limpa o onmessage handler APENAS se a mensagem for final.
-                // Para 'info depth', Stockfish envia múltiplas linhas, então precisamos ter cuidado.
-                // Para este exemplo, resolvemos na primeira 'bestmove' ou 'info depth'.
-                // Em um app mais complexo, você acumularia as 'info' e só resolveria no 'bestmove'.
-                if (message.startsWith('bestmove')) {
-                    stockfish.onmessage = null;
-                }
-            } else if (message.includes('No bestmove found')) {
-                resolve('No bestmove found');
-                stockfish.onmessage = null;
+            }
+            // Se for uma análise (info depth), podemos coletar e continuar aguardando o bestmove
+            // A lógica de 'go infinite' e 'stop' é mais robusta para análise contínua.
+            // Para 'go depth', o bestmove virá no final.
+            if (expectedResponseStart === 'bestmove' && message.startsWith('info depth')) {
+                // Você pode armazenar essas linhas se quiser mostrá-las antes do bestmove
+                // ou simplesmente ignorá-las se o objetivo é apenas o bestmove final.
             }
         };
         stockfish.postMessage(command);
@@ -40,67 +50,85 @@ function sendStockfishCommand(command) {
 /**
  * Obtém o melhor movimento do Stockfish para a posição atual.
  * @param {number} depth - Profundidade de busca.
- * @returns {Promise<string>} A promessa que resolve com o comando 'bestmove' do Stockfish.
+ * @returns {Promise<string>} O movimento no formato UCI.
  */
 async function getStockfishMove(depth) {
-    // Certifica-se de que o Stockfish está pronto e limpo para um novo comando
-    await sendStockfishCommand('ucinewgame');
-    await sendStockfishCommand('isready');
-    await sendStockfishCommand('setoption name Skill Level value ' + currentSkillLevel);
-    await sendStockfishCommand('position fen ' + game.fen());
-    // Manda o Stockfish pensar. Pode demorar.
-    const response = await sendStockfishCommand('go depth ' + depth);
-    console.log("Stockfish Best Move Response:", response);
-    return response;
+    try {
+        await sendStockfishCommand('ucinewgame', 'readyok', 1000); // Garante um novo jogo UCI
+        await sendStockfishCommand('isready', 'readyok', 1000); // Garante que está pronto
+        stockfish.postMessage('setoption name Skill Level value ' + currentSkillLevel);
+        await sendStockfishCommand('setoption name Skill Level value ' + currentSkillLevel, 'option set', 500); // Confirma a opção
+        stockfish.postMessage('position fen ' + game.fen());
+        const response = await sendStockfishCommand('go depth ' + depth, 'bestmove', 15000); // Aumenta timeout para movimento
+        const bestMoveMatch = response.match(/bestmove\s(\S+)/);
+        if (bestMoveMatch && bestMoveMatch[1]) {
+            return bestMoveMatch[1];
+        } else {
+            console.error("Stockfish did not return a bestmove.", response);
+            return null;
+        }
+    } catch (error) {
+        console.error("Error getting Stockfish move:", error);
+        return null;
+    }
 }
 
 /**
  * Obtém uma análise da posição atual do Stockfish.
- * @param {number} depth - Profundidade de busca para análise.
- * @returns {Promise<string>} Uma promessa que resolve com a saída de análise do Stockfish.
+ * @param {number} depth - Profundidade de busca.
+ * @returns {Promise<string>} Uma string formatada com a análise.
  */
 async function getStockfishAnalysis(depth) {
-    // Para análise, vamos coletar todas as linhas 'info depth' e não apenas a primeira
     return new Promise((resolve) => {
-        let analysisOutput = '';
-        let timer = null; // Usado para detectar quando o Stockfish parou de enviar 'info'
+        let analysisBuffer = [];
+        let timer = null;
 
         stockfish.onmessage = function (event) {
             var message = event.data || event;
+            // console.log("Analysis message:", message); // Para depuração
+
             if (message.startsWith('info depth')) {
-                analysisOutput += message + '\n';
-                // Reseta o timer a cada nova linha 'info depth'
+                analysisBuffer.push(message);
+                // Atualiza a saída em tempo real
+                const lines = analysisBuffer.filter(line => line.startsWith('info depth'));
+                const relevantLines = lines.slice(Math.max(lines.length - 5, 0)); // Últimas 5 linhas
+                $analysisOutput.text(relevantLines.join('\n'));
+
                 clearTimeout(timer);
                 timer = setTimeout(() => {
-                    // Se nenhuma nova linha 'info depth' for recebida em 200ms, assume que a análise terminou
-                    stockfish.onmessage = null; // Limpa o handler
-                    resolve(analysisOutput);
-                }, 200);
+                    // Assume que a análise diminuiu ou parou se nenhuma nova mensagem por 500ms
+                    stockfish.postMessage('stop'); // Pede para Stockfish parar de pensar
+                    stockfish.onmessage = null;
+                    resolve(relevantLines.join('\n') || 'Nenhuma análise detalhada.');
+                }, 500);
             } else if (message.startsWith('bestmove')) {
-                // Se receber 'bestmove' inesperadamente, termina a análise
+                // Se receber o bestmove, é o fim da análise de 'go depth' ou 'go infinite' com stop.
                 clearTimeout(timer);
-                stockfish.onmessage = null; // Limpa o handler
-                resolve(analysisOutput + '\n' + message);
+                stockfish.onmessage = null;
+                resolve(analysisBuffer.filter(line => line.startsWith('info depth')).slice(-5).join('\n') + '\nBest move: ' + message.split(' ')[1]);
             }
         };
-        // Envia o comando para análise. 'infinite' significa que ele continua analisando até 'stop'.
+
+        // Inicia a análise
         stockfish.postMessage('ucinewgame');
         stockfish.postMessage('isready');
         stockfish.postMessage('position fen ' + game.fen());
-        stockfish.postMessage('go infinite'); // Inicia a análise contínua
+        // Manda o Stockfish analisar por um tempo limitado ou até encontrar um bestmove
+        stockfish.postMessage('go depth ' + depth);
 
-        // Define um tempo limite para parar a análise e resolver a promessa
+        // Define um tempo limite geral para a análise, caso não venha 'bestmove' ou 'info' suficiente
         setTimeout(() => {
-            stockfish.postMessage('stop'); // Pede para o Stockfish parar de pensar
-            clearTimeout(timer);
-            stockfish.onmessage = null; // Limpa o handler para evitar múltiplos handlers
-            resolve(analysisOutput || 'Análise não disponível.'); // Resolve com o que foi coletado
-        }, 5000); // Para a análise após 5 segundos
+            stockfish.postMessage('stop');
+            stockfish.onmessage = null;
+            resolve(analysisBuffer.filter(line => line.startsWith('info depth')).slice(-5).join('\n') || 'Análise concluída.');
+        }, depth * 1000 + 1000); // Ex: depth 10 = 11 segundos de timeout
     });
 }
 
+
 // --- Funções de Tabuleiro e Lógica do Jogo ---
 
+// Função chamada quando uma peça começa a ser arrastada
 function onDragStart(source, piece, position, orientation) {
     if (game.game_over() === true ||
         (game.turn() === 'w' && piece.search(/^b/) !== -1) ||
@@ -109,26 +137,29 @@ function onDragStart(source, piece, position, orientation) {
     }
 }
 
-function onDrop(source, target) {
+// Função chamada quando uma peça é solta
+async function onDrop(source, target) {
     var move = game.move({
         from: source,
         to: target,
-        promotion: 'q'
+        promotion: 'q' // Sempre promove para rainha por simplicidade
     });
 
-    if (move === null) return 'snapback';
+    if (move === null) return 'snapback'; // Movimento ilegal
 
-    updateStatus();
-    // Apenas move o Stockfish se o jogo não tiver terminado após o movimento do jogador
+    await updateStatus(); // Aguarda a atualização do status e análise
     if (game.game_over() === false) {
-        makeStockfishMove();
+        // Aguarda um pequeno delay antes do Stockfish mover para a UI atualizar
+        setTimeout(makeStockfishMove, 500);
     }
 }
 
+// Atualiza a posição do tabuleiro após um 'snapback' (movimento ilegal)
 function onSnapEnd() {
     board.position(game.fen());
 }
 
+// Atualiza o status do jogo (xeque, mate, turno, etc.) e a análise do Stockfish
 async function updateStatus() {
     var status = '';
     var moveColor = 'Brancas';
@@ -147,37 +178,47 @@ async function updateStatus() {
         if (game.in_check() === true) {
             status += ', ' + moveColor + ' está em xeque.';
         }
-        // Solicita análise do Stockfish após cada movimento
-        $analysisOutput.text('Analisando...');
-        const analysis = await getStockfishAnalysis(currentDepth);
-        // Exibe apenas as últimas 5 linhas de info depth para não sobrecarregar
-        const lines = analysis.split('\n').filter(line => line.startsWith('info depth'));
-        const relevantLines = lines.slice(Math.max(lines.length - 5, 0));
-        $analysisOutput.text(relevantLines.join('\n'));
+        // Solicita e exibe a análise do Stockfish
+        $analysisOutput.text('Analisando...'); // Mensagem enquanto Stockfish pensa
+        await getStockfishAnalysis(currentDepth);
     }
     $status.html(status);
 }
 
+// Função para o Stockfish fazer um movimento
 async function makeStockfishMove() {
     if (game.game_over() === true) return;
 
     $status.text('Stockfish pensando...');
-    const stockfishResponse = await getStockfishMove(currentDepth);
-    const bestMoveMatch = stockfishResponse.match(/bestmove\s(\S+)/);
+    const bestMove = await getStockfishMove(currentDepth);
 
-    if (bestMoveMatch && bestMoveMatch[1]) {
-        const bestMove = bestMoveMatch[1];
+    if (bestMove) {
         console.log("Stockfish Best Move:", bestMove);
         game.move(bestMove, { sloppy: true }); // 'sloppy' para aceitar formato UCI
         board.position(game.fen());
         updateStatus();
     } else {
-        $status.text('Stockfish não encontrou um movimento ou o jogo terminou.');
-        console.error("Erro ao obter o melhor movimento do Stockfish:", stockfishResponse);
+        $status.text('Stockfish não encontrou um movimento ou houve um erro.');
+        console.error("Erro ou movimento não encontrado pelo Stockfish.");
     }
 }
 
-// --- Inicialização e Event Listeners (dentro de $(document).ready) ---
+// Desfazer o último movimento
+function undoLastMove() {
+    if (game.history().length > 0) {
+        game.undo(); // Desfaz o movimento do jogador
+        if (game.history().length > 0 && game.turn() !== 'w') { // Se o Stockfish já tiver movido, desfaz o dele também
+             game.undo();
+        }
+        board.position(game.fen());
+        updateStatus();
+    } else {
+        $status.text('Não há movimentos para desfazer.');
+    }
+}
+
+
+// --- Inicialização e Event Listeners ---
 
 $(document).ready(function() {
     // Atribui os elementos jQuery após o DOM estar pronto
@@ -194,14 +235,16 @@ $(document).ready(function() {
         position: 'start',
         onDragStart: onDragStart,
         onDrop: onDrop,
-        onSnapEnd: onSnapEnd
+        onSnapEnd: onSnapEnd,
+        // Configura o caminho para as imagens das peças via CDN
+        pieceTheme: 'https://unpkg.com/chessboard-js@1.0.0/img/chesspieces/wikipedia/{piece}.png'
     });
 
     // Inicializa o Stockfish.js como um Worker
     stockfish = new Worker('https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js');
-    stockfish.postMessage('uci'); // Envia o comando UCI para iniciar o Stockfish
-    stockfish.postMessage('isready');
-    stockfish.postMessage('ucinewgame'); // Inicia um novo jogo no Stockfish
+    stockfish.postMessage('uci'); // Inicia o protocolo UCI
+    stockfish.postMessage('isready'); // Pergunta se está pronto
+    stockfish.postMessage('ucinewgame'); // Começa um novo jogo no Stockfish
 
     // Atualiza os valores dos sliders na interface E as variáveis globais
     $depthSlider.on('input', function() {
@@ -215,7 +258,8 @@ $(document).ready(function() {
     $skillLevelSlider.on('input', function() {
         currentSkillLevel = $(this).val();
         $currentSkillLevelSpan.text(currentSkillLevel);
-        // O Stockfish aplica o skill level automaticamente nas próximas chamadas 'go'
+        // Não é necessário enviar o skill level para o Stockfish a cada mudança do slider.
+        // Ele será enviado antes de cada chamada 'go'.
     });
     // Define o valor inicial no span
     $currentSkillLevelSpan.text($skillLevelSlider.val());
@@ -224,7 +268,7 @@ $(document).ready(function() {
     $('#new-game-btn').on('click', function() {
         game.reset();
         board.position('start');
-        stockfish.postMessage('ucinewgame');
+        stockfish.postMessage('ucinewgame'); // Reinicia o Stockfish também
         stockfish.postMessage('isready');
         $analysisOutput.text('');
         updateStatus();
@@ -237,11 +281,9 @@ $(document).ready(function() {
             return;
         }
         $analysisOutput.text('Pensando em uma dica...');
-        // Para uma dica, podemos pedir um bestmove e mostrar
-        const hintResponse = await getStockfishMove(currentDepth);
-        const bestMoveMatch = hintResponse.match(/bestmove\s(\S+)/);
-        if (bestMoveMatch && bestMoveMatch[1]) {
-            $analysisOutput.text('Dica: Melhor movimento é ' + bestMoveMatch[1]);
+        const bestMove = await getStockfishMove(currentDepth);
+        if (bestMove) {
+            $analysisOutput.text('Dica: Melhor movimento é ' + bestMove);
         } else {
             $analysisOutput.text('Não foi possível obter uma dica.');
         }
@@ -250,6 +292,11 @@ $(document).ready(function() {
     // Botão Mover Stockfish (útil para testar ou jogar contra o Stockfish)
     $('#stockfish-move-btn').on('click', function() {
         makeStockfishMove();
+    });
+
+    // Botão Desfazer
+    $('#undo-move-btn').on('click', function() {
+        undoLastMove();
     });
 
     // Estado inicial
@@ -265,10 +312,9 @@ $(document).ready(function() {
 // 4. Verificar Afogamento (Stalemate): Implementado via game.in_draw() em updateStatus.
 //    (O chess.js lida com stalemate, threefold repetition, 50-move rule, e material insuficiente)
 // 5. Gerar Movimentos Legais: Implicitamente gerenciado por game.move() (que retorna null se o movimento for ilegal)
-//    ou game.moves() para obter uma lista.
+//    ou explicitamente por game.moves() para obter uma lista.
 // 6. Reiniciar Jogo: Implementado no botão 'Novo Jogo' usando game.reset() e board.position('start').
-// 7. Desfazer Movimento: Pode ser implementado com game.undo() (requer um botão/lógica adicional).
-//    Exemplo: function undoLastMove() { if (game.undo()) { board.position(game.fen()); updateStatus(); } }
+// 7. Desfazer Movimento: Implementado no botão 'Desfazer' usando undoLastMove().
 // 8. Obter Dica (Stockfish): Implementado no botão 'Pedir Dica' usando getStockfishMove.
 // 9. Obter Melhor Movimento (Stockfish): Implementado em makeStockfishMove usando getStockfishMove.
 // 10. Analisar Posição (Stockfish): Implementado em updateStatus usando getStockfishAnalysis para mostrar 'info depth'.
