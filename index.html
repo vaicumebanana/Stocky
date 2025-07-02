@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stockfish Chess Tutor</title>
+    <link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" integrity="sha384-OxIEabK+K8Q+mJ6aP/v51C/2gWz3N+X0M+2zW7/Jg+M4L+qQjJz+2g==" crossorigin="anonymous">
+    <script src="https://code.jquery.com/jquery-3.5.1.min.js"></script>
+    <script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js" integrity="sha384-LgD1iT+oXhSjYQ+1rN+x+5w/dFzWj2/z5F+hRz9p+2g==" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js"></script>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Stockfish Chess Tutor</h1>
+
+        <div class="controls">
+            <div class="slider-group">
+                <label for="depth-slider">Profundidade de Análise (Depth): <span id="current-depth">10</span></label>
+                <input type="range" id="depth-slider" min="1" max="20" value="10" step="1">
+            </div>
+            <div class="slider-group">
+                <label for="skill-level-slider">Nível de Habilidade (Stockfish Skill): <span id="current-skill-level">10</span></label>
+                <input type="range" id="skill-level-slider" min="0" max="20" value="10" step="1">
+            </div>
+            <div class="buttons-group">
+                <button id="new-game-btn">Novo Jogo</button>
+                <button id="hint-btn">Pedir Dica</button>
+                <button id="stockfish-move-btn">Mover Stockfish</button>
+            </div>
+        </div>
+
+        <div id="board" style="width: 400px"></div>
+
+        <div class="messages">
+            <h2>Mensagens e Análise:</h2>
+            <p id="game-status">Inicie um novo jogo!</p>
+            <pre id="analysis-output"></pre>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
