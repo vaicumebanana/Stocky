@@ -2,7 +2,7 @@ body {
     font-family: Arial, sans-serif;
     display: flex;
     justify-content: center;
-    align-items: flex-start; /* Alinha o conteúdo ao topo */
+    align-items: flex-start; /* Alinha o conteúdotopo */
     min-height: 100vh;
     background-color: #f0f0f0;
     margin: 20px;
